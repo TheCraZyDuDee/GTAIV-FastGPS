@@ -2,11 +2,7 @@
 
 Version 1.0.0 uses the v0.8 routing policy unchanged. The abandoned forward-node and watchdog experiments are retained in Git history, not in the active source tree.
 
-## Build and verification
-
-Run `build.cmd` from the Visual Studio x86 Native Tools prompt with the Windows SDK. `python verify_exe.py GTAIV.exe` checks 19 executable signatures without editing the game. `python verify_build.py FastGPS.asi FastGPS.obj` checks PE32 imports and the exact clang-cl detour layout (other compilers can encode instructions differently). The five host test programs (`test_*.c`) cover tracking, motion, directed graph routing, adaptive preferences and mocked module-relative paths. Compile with clang and run each test; AddressSanitizer and UndefinedBehaviorSanitizer are recommended. The included release workflow builds on Windows and runs the host tests on Linux before publishing.
-
-v0.7 and v0.8 received positive in-game feedback. The 1.0.0 build is a release cleanup of v0.8, not a new routing algorithm. Other executable builds remain unsupported; longer play sessions and mod combinations have not been exhaustively tested.
+See [Building and testing](Building.md) for build commands and verification. v0.7 and v0.8 received positive in-game feedback; 1.0.0 retains that routing policy. Other executable builds remain unsupported.
 
 ## Native hook sites
 
@@ -20,4 +16,4 @@ Supplied PE32 GTAIV.exe: SHA-256 `08759a5516f9837920ea504436236bbab89d0826a8e4d0
 
 ## Limitations
 
-The ASI cannot be executed in GTA IV in this environment. Windows INI/path behavior is tested using mocked API calls, not a live Windows game session. Native route failures, genuine U-turns, parallel roads and unusual intersections may still limit guidance. Additional detours can be longer than desired, and the existing second native search can add some frame time. The log reports the actual selected path. No game executable is redistributed.
+Automated tests do not launch GTA IV. Windows INI/path behavior is covered by mocked API tests; long-term in-game stability and mod combinations have not been exhaustively tested. Native route failures, genuine U-turns, parallel roads and unusual intersections may still limit guidance. Additional detours can be longer than desired, and the existing second native search can add some frame time. The log reports the actual selected path. No game executable is redistributed.

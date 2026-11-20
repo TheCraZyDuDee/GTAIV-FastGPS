@@ -1,8 +1,7 @@
-name: Build and publish release
+name: Build and release
 on:
   push:
     branches: [main]
-    paths: [VERSION, .github/workflows/release.yml]
   workflow_dispatch:
 
 permissions:
@@ -14,12 +13,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - name: Run portable tests
-        run: |
-          set -e
-          for source in test_*.c; do
-            clang -O1 -g -fsanitize=address,undefined "$source" -o /tmp/fastgps-test
-            /tmp/fastgps-test
-          done
+        run: bash tools/test.sh
   publish:
     if: github.ref == 'refs/heads/main'
     needs: tests
@@ -34,10 +28,10 @@ jobs:
           $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           if (-not $vs) { throw 'Visual Studio x86 tools not found' }
           $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvarsall.bat'
-          $command = 'call "' + $vcvars + '" x86 && clang-cl --target=i686-pc-windows-msvc /nologo /c /O2 /GS- /Zl /arch:SSE2 /TC FastGPS.c /Fo:FastGPS.obj && lld-link /nologo /DLL /ENTRY:DllMain@12 /NODEFAULTLIB /MACHINE:X86 /DYNAMICBASE /NXCOMPAT /SAFESEH:NO /OUT:FastGPS.asi FastGPS.obj kernel32.lib'
+          $command = 'call "' + $vcvars + '" x86 && call build.cmd'
           cmd.exe /d /c $command
           if ($LASTEXITCODE -ne 0) { throw 'ASI build failed' }
-          python verify_build.py FastGPS.asi FastGPS.obj
+          python tools/verify_build.py build/FastGPS.asi build/FastGPS.obj
           if ($LASTEXITCODE -ne 0) { throw 'Binary verification failed' }
       - name: Package and publish
         shell: pwsh
@@ -50,8 +44,8 @@ jobs:
           $zip = "FastGPS-v$version.zip"
           gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
           if ($LASTEXITCODE -eq 0) { Write-Host 'Release already exists; no changes made.'; exit 0 }
-          Compress-Archive -Path FastGPS.asi,FastGPS.ini,README.txt,LICENSE -DestinationPath $zip
+          Compress-Archive -Path build/FastGPS.asi,package/FastGPS.ini,package/README.txt,LICENSE -DestinationPath $zip
           $sha = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
           "$sha  $zip" | Set-Content -Encoding ascii "$zip.sha256"
-          gh release create $tag $zip "$zip.sha256" --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "GTAIV-FastGPS $version" --notes-file RELEASE_NOTES.md --latest
+          gh release create $tag $zip "$zip.sha256" --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "GTAIV-FastGPS $version" --notes-file package/RELEASE_NOTES.md --latest
           if ($LASTEXITCODE -ne 0) { throw 'Release publication failed' }
