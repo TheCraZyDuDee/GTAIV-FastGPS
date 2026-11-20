@@ -1,37 +1,40 @@
-# GTAIV-FastGPS
+# GTAIV-FastGPS v0.3 — motion-aware GPS
 
-Version 0.2. Native x86 ASI mod for Grand Theft Auto IV. Reduces the GPS route-acceptance delay from 3,000 ms to 184 ms after a missed turn and reduces the off-route detection threshold from 50 to 20 game-world distance units. The original pathfinding system and its readiness checks remain intact; the actual time to receive a new route depends on when it finishes.
+Experimental x86 ASI for GTA IV Complete Edition 1.2.0.59. Retains the native road network, pathfinder, waypoint handling and route trimming, and improves the decision to recalculate. v0.3 adds movement-aware tracking to the existing distance and timer patches.
 
-## Compatibility
+- Native route-acceptance wait: 3,000 → 184 ms.
+- Native off-route distance: 50 → 20 game units.
+- Motion analysis: samples at intervals of at least 100 ms; predicts roughly 10 units ahead along measured movement. A trajectory leaving the local route corridor or moving against nearby route direction can trigger a reroute before the 20-unit distance limit.
+- Requires at least two bad samples and four units of measured movement; rejects very slow motion, teleports, large frame gaps and invalid coordinates. Near-arrival handling stays native. The 3D distance mode is preserved.
+- A per-route direction lock prevents repeated forced reroutes if the new path still recommends a U-turn. Two agreeing samples plus a 1.2-second lockout rearm it. The original native deviation rule always remains active.
 
-Statically verified against the provided Complete Edition 1.2.0.59 executable (PE timestamp `0x63D3E735`, SHA-256 `08759a5516f9837920ea504436236bbab89d0826a8e4d04ff106345177b5345d`). Other versions/builds are not supported. The DLL checks the PE header, instruction bytes and relocated addresses before writing; a mismatch skips the patch. A modified executable may be rejected. No game binaries are distributed or edited on disk.
+## Install
 
-## Installation
+Replace the previous `FastGPS.asi` (do not load multiple versions). Use a compatible 32-bit ASI loader configured to load at game startup; place the ASI beside `GTAIV.exe` or in its configured plugin directory. Restart the game. Uninstall by removing the ASI before restarting. No ScriptHook, config, or on-disk game changes. Do not hot-load or hot-unload; the module is pinned for process lifetime because the patched call targets its code.
 
-1. Remove any earlier FastGPS ASI first; do not load both versions. Ensure a compatible 32-bit ASI loader is installed for your GTA IV build.
-2. Place `FastGPS.asi` beside `GTAIV.exe` (or in the ASI loader's configured plugin directory).
-3. Restart the game. To uninstall, remove `FastGPS.asi` before starting the game again.
+## Diagnostics
 
-The plugin writes a diagnostic through `OutputDebugStringA`; use a Windows debugger or DebugView to capture `[FastGPS v0.2] Applied: 3000 -> 184 ms; off-route 50 -> 20 units.` A rejection or protection error instead produces a `Not applied` message. No config is needed.
+Windows DebugView or a debugger can capture:
 
-## Build
+- `[FastGPS v0.3] Motion-aware GPS active.`
+- `[FastGPS v0.3] Predicted-departure reroute.`
+- `[FastGPS v0.3] Reverse-progress reroute.`
+- `[FastGPS v0.3] Not applied: unsupported build, conflicting patch or protection failure.`
 
-Run `build.cmd` in the **x86 Native Tools Command Prompt for Visual Studio** with the C++ desktop development tools and Windows SDK installed. The target is `FastGPS.asi`, a 32-bit DLL with no C runtime and only kernel32 imports. No ScriptHook or additional library is required.
+## Reverse engineering
 
-## Reverse-engineering notes
+Verified against the supplied PE32 executable, timestamp `0x63D3E735`, image size `0x01BE6400`, SHA-256 `08759a5516f9837920ea504436236bbab89d0826a8e4d04ff106345177b5345d`. Preferred image base `0x400000`. Unsupported signatures fail closed. Offsets are relative to the loaded game module.
 
-Addresses below apply to the supplied executable at its preferred image base of `0x400000`:
+- `0x937610` GPS state machine; `0x937882` adds 3000 ms before native ready-check. Byte at RVA `0x537884` changes from `0B` to `00` (184 ms).
+- `0x937920` native tracking routine, state 3: nearest of up to eleven line segments; `0x936A20` trims earlier segments; `0x937AE8` compares distance to 50.0. Byte at RVA `0x537AEB` redirects the operand to existing 20.0 float, without changing either float globally.
+- `0x9378E9` is a direct `call 0x937920` after the main state machine and before native downstream GPS processing. Hook only this call's relative operand. Wrapper calls native routine first via x86 thiscall, then observes the existing active route (`self+0`, 16 bytes per point, count at `+0xD60`, destination at `+0xD50`). `0x93F050` guards the player accessor; `0x93F090` reads native player coordinates; `0x11735B4` is the game-time clock; `0x11A2EA3` selects 3D matching. State must remain 3 after native processing. Forced reroute writes state 1 and the game timestamp at `+0xD64` and `+0xD68`, exactly as the vanilla deviation branch at `0x937B04` does. No route buffer edits or direct path-job injection.
 
-- `0x937920`: route update/deviation handler. It examines up to 11 upcoming route segments using the point-to-segment distance helper at `0xAF86A0`. At `0x937AE8`, `comiss xmm1, [0xFE8B68]` compares the minimum distance to 50.0f. A value above 50 triggers the off-route branch. The off-route branch at `0x937B04` sets state 1 and stores the current game timer in `[ebx+0xD68]`.
-- `0x937610`: GPS update routine. At `0x937882`, `add eax, 0xBB8` adds 3,000 ms to the saved timestamp. The comparison at `0x937887` branches away until the deadline has passed. The pathfinding readiness test still follows, and the routine accepts the completed path only when ready.
-- The mod writes one byte at RVA `0x537884`, changing `05 B8 0B 00 00` to `05 B8 00 00 00` (184 ms). It uses the module base rather than a fixed loaded address and restores page protection after flushing the instruction cache. State 2 and the pre-existing bypass flag remain untouched. Other GPS operations that share this gate may also complete sooner.
+The game updates two GPS instances at `0x9375F6`; bounded per-instance tracking prevents cross-contamination. All three edits share a code page and are validated before writing. The patch is intended for startup only, not injection into an already running game. Original page protections are restored, and failed patch writes are rolled back where possible.
 
-- v0.2 also changes one byte at RVA `0x537AEB` (operand of `comiss`), redirecting the comparison from the existing 50.0f constant at RVA `0xBE8B68` to the existing 20.0f constant at RVA `0xBE8B38`. The shared constants themselves remain untouched. Both original/target floats and instruction context are checked before either write. The 64 KiB image alignment preserves this low-byte operand change under ASLR. Both edits share a code page. The route search window, state transitions and moving-destination threshold remain unchanged.
+## Build and verification
 
-The detection threshold is reduced by 60%; 20 units is a conservative starting point, not a guarantee of perfect detection. Nearby roads, overlapping routes and the existing 11-segment lookahead can still delay recognition. The delay is reduced by about 94%; this is not a benchmark of total GPS calculation time. The 184 ms value was chosen to make the patch a single-byte change while retaining a brief wait. No new pathfinding requests are injected.
+Run `build.cmd` in a Visual Studio x86 Native Tools Command Prompt with Windows SDK. The ASI was cross-compiled with clang-cl and lld-link as PE32 and checked for the six undecorated kernel32 imports. No CRT is linked. `python verify_exe.py GTAIV.exe` checks code signatures and operands offline without modifying the game. `clang -O2 -Wall -Wextra -Werror test_tracker.c -o test_tracker` (or `cl /TC test_tracker.c`) builds the portable synthetic test suite; run the result. Tests cover wrong turn, reverse progress and lock/rearming, straight driving, correct turn, lane change, stationary, teleport/frame gap, arrival, timer wrap and 3D segment distance. These tests do not launch GTA IV.
 
-## Verification and testing
+## Known limitations
 
-`python verify_exe.py path\to\GTAIV.exe` checks the original executable offline without changing it. The compiled ASI has been cross-compiled and checked for PE32 architecture and correct Windows import names. User feedback confirms v0.1 improves rerouting speed after detection. v0.2 has been statically verified; its in-game testing remains outstanding.
-
-Suggested in-game checks: use the same waypoint/vehicle/road in vanilla and modded sessions, miss a turn several times, measure time from off-route detection to the new visible route, and watch for route flicker or crashes. Also test waypoint changes, mission GPS, and driving close to parallel roads. Check that normal lane changes, wide junctions and sharp curves do not cause repeated reroutes. Check DebugView for the applied message. If there is a conflict, uninstall the mod; no executable repair is needed.
+The direction logic is a geometry/motion heuristic, not lane-level map matching. It can still miss closely overlapping routes or misclassify unusual maneuvers; native pathfinding may legitimately recommend a U-turn, so a route continuing behind the marker is not automatically a display defect. The map renderer is unchanged. v0.1 and v0.2 were tested by the user; v0.3 still needs in-game validation, especially GPS at junctions, U-turns, parking and parallel roads, mission destinations, waypoint changes, and repeated route refreshes. Actual latency depends on native frame update frequency and pathfinding readiness.
