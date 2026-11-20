@@ -4,6 +4,7 @@
 #define P(x,y,z) ((Point){x,y,z,0})
 int main(void) {
     Settings s=defaults;Preference p={0};Direction d;
+    assert(s.logging==0);s.logging=42;normalize_settings(&s);assert(s.logging==0);
     assert(detour_budget(&s,2000,0)==1000);
     assert(detour_budget(&s,2000,3)==2000);
     assert(detour_budget(&s,2000,99)==2000);

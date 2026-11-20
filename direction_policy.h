@@ -1,7 +1,7 @@
 /* Local, direction-aware routing policy. No game-memory access. */
 #ifndef FASTGPS_DIRECTION_POLICY_H
 #define FASTGPS_DIRECTION_POLICY_H
-#include "road_start.h"
+#include "motion.h"
 typedef struct { Point pos; float hx,hy; } Direction;
 static int direction_init(Direction *d,Point p,float dx,float dy) {
     float m=norm_approx(dx,dy);

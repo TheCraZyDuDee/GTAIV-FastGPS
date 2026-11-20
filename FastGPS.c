@@ -167,11 +167,15 @@ static void copy_point(volatile Point *d,const volatile Point *s) {
     d->x=s->x;d->y=s->y;d->z=s->z;d->w=s->w;
 }
 static void log_bias(U32 count,U32 elapsed) {
-    char b[128],*p=log_text(b,"bias_stats blocked_edges=");p=log_uint(p,count);
+    char b[128],*p;
+    if(!log_file)return;
+    p=log_text(b,"bias_stats blocked_edges=");p=log_uint(p,count);
     p=log_text(p," wall_ms=");p=log_uint(p,elapsed);log_send(b,p);
 }
 static void log_budget(float base,float candidate,float allowance,unsigned rejects) {
-    char b[192],*p=log_text(b,"detour_budget baseline=");
+    char b[192],*p;
+    if(!log_file)return;
+    p=log_text(b,"detour_budget baseline=");
     p=log_int(p,(int)base);p=log_text(p," candidate=");p=log_int(p,(int)candidate);
     p=log_text(p," allowance=");p=log_int(p,(int)allowance);
     p=log_text(p," previous_detour_rejections=");p=log_uint(p,rejects);log_send(b,p);
@@ -240,7 +244,7 @@ static void __fastcall update(U8 *self,void *unused) {
     if(*(int *)(self+STATE)!=3 || !get_player()) {
         tracker_pause(s);
         now=*(U32 *)(game+TIMER);
-        if((*(int *)(self+STATE)==1||*(int *)(self+STATE)==2) && get_player() && now-last_sample[index]>=500) {
+        if(log_file && (*(int *)(self+STATE)==1||*(int *)(self+STATE)==2) && get_player() && now-last_sample[index]>=500) {
             p.w=0;get_pos(&p);last_sample[index]=now;log_route("pending",self,p);
         }
         /* A cleared GPS or absent player starts a genuinely new session.
@@ -274,18 +278,18 @@ static void __fastcall update(U8 *self,void *unused) {
            route buffer mutation. Native logic handles it on the next update. */
         *(U32 *)(self+STATE)=1; *(U32 *)(self+STAMP)=now;
         tracker_pause(s);
-        if(was_locked)OutputDebugStringA("[FastGPS v0.8] Direction lock overridden; retrying native route.\n");
-        OutputDebugStringA(reason==REVERSE?"[FastGPS v0.8] Reverse-progress reroute.\n":
-                                          "[FastGPS v0.8] Predicted-departure reroute.\n");
+        if(settings.logging && was_locked)OutputDebugStringA("[FastGPS v1.0.0] Direction lock overridden; retrying native route.\n");
+        if(settings.logging)OutputDebugStringA(reason==REVERSE?"[FastGPS v1.0.0] Reverse-progress reroute.\n":
+                                          "[FastGPS v1.0.0] Predicted-departure reroute.\n");
     }
-    if(now-last_sample[index]>=500) {last_sample[index]=now;log_route("active",self,p);}
+    if(log_file && now-last_sample[index]>=500) {last_sample[index]=now;log_route("active",self,p);}
     }
 }
 /* Observe the actual native readiness result; never bypass it. */
 static U8 __fastcall ready(U8 *graph,void *unused,U32 slot_id) {
     U8 result=((U8 (__thiscall *)(U8 *,U32))(game+0x4ECE70))(graph,slot_id);
     U32 now=*(U32 *)(game+TIMER);(void)unused;
-    if(slot_id<3 && (result || !have_wait[slot_id] || now-last_wait[slot_id]>=500)) {
+    if(log_file && slot_id<3 && (result || !have_wait[slot_id] || now-last_wait[slot_id]>=500)) {
         have_wait[slot_id]=!result;last_wait[slot_id]=now;
         log_region(result?"roads_ready":"roads_wait",graph,slot_id);
     }
@@ -356,9 +360,9 @@ static int apply_patch(void *module) {
         for(i=0;i<sizeof relax_bytes;i++)r[i]=relax_bytes[i];for(i=0;i<sizeof extract_bytes;i++)e[i]=extract_bytes[i];
         FlushInstructionCache(GetCurrentProcess(),b+DELAY,n);FlushInstructionCache(GetCurrentProcess(),r,sizeof relax_bytes);FlushInstructionCache(GetCurrentProcess(),e,sizeof extract_bytes);
     }
-    if(!VirtualProtect(e,sizeof extract_bytes,old3,&ignored))OutputDebugStringA("[FastGPS v0.8] Could not restore extraction page protection.\n");
-    if(!VirtualProtect(r,sizeof relax_bytes,old2,&ignored))OutputDebugStringA("[FastGPS v0.8] Could not restore search page protection.\n");
-    if(!VirtualProtect(b+DELAY,n,old,&ignored))OutputDebugStringA("[FastGPS v0.8] Could not restore GPS page protection.\n");
+    if(!VirtualProtect(e,sizeof extract_bytes,old3,&ignored))OutputDebugStringA("[FastGPS v1.0.0] Could not restore extraction page protection.\n");
+    if(!VirtualProtect(r,sizeof relax_bytes,old2,&ignored))OutputDebugStringA("[FastGPS v1.0.0] Could not restore search page protection.\n");
+    if(!VirtualProtect(b+DELAY,n,old,&ignored))OutputDebugStringA("[FastGPS v1.0.0] Could not restore GPS page protection.\n");
     if(!flushed)return 0;
     return 1;
 }
@@ -366,8 +370,8 @@ int __stdcall DllMain(HANDLE module,U32 reason,void *reserved) {
     (void)reserved;
     if(reason==1) {
         int ok;load_settings(module);ok=apply_patch(module);log_open();
-        log_event(ok?"FastGPS v0.8 active; coordinates x10":"FastGPS v0.8 rejected");
-        OutputDebugStringA(ok?"[FastGPS v0.8] Active.\n":"[FastGPS v0.8] Not applied.\n");
+        log_event(ok?"FastGPS v1.0.0 active; coordinates x10":"FastGPS v1.0.0 rejected");
+        OutputDebugStringA(ok?"[FastGPS v1.0.0] Active.\n":"[FastGPS v1.0.0] Not applied.\n");
     }
     return 1;
 }

@@ -1,4 +1,4 @@
-/* v0.8: configurable detour budget and conservative route stability. */
+/* v1.0.0: configurable detour budget and conservative route stability. */
 #ifndef FASTGPS_ADAPTIVE_H
 #define FASTGPS_ADAPTIVE_H
 #include "direction_policy.h"
@@ -7,7 +7,7 @@ typedef struct {
     unsigned prefer_forward, adaptive, percent, max_extra, adaptive_percent,
              adaptive_extra, preserve, logging;
 } Settings;
-static const Settings defaults={1,1,50,1000,100,2000,1,1};
+static const Settings defaults={1,1,50,1000,100,2000,1,0};
 static unsigned bounded(unsigned v,unsigned lo,unsigned hi,unsigned fallback) {
     return v>=lo && v<=hi?v:fallback;
 }
@@ -21,7 +21,7 @@ static void normalize_settings(Settings *s) {
     if(s->adaptive_percent<s->percent)s->adaptive_percent=s->percent;
     if(s->adaptive_extra<s->max_extra)s->adaptive_extra=s->max_extra;
     s->preserve=bounded(s->preserve,0,1,1);
-    s->logging=bounded(s->logging,0,1,1);
+    s->logging=bounded(s->logging,0,1,0);
 }
 static float detour_budget(const Settings *s,float length,unsigned rejects) {
     unsigned level=s->adaptive?(rejects>3?3:rejects):0;
