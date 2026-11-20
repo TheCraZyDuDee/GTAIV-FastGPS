@@ -51,10 +51,17 @@ static void __fastcall update(U8 *self,void *unused) {
     (void)unused;
     native_update(self);
     s=slot(self);
-    if(*(int *)(self+STATE)!=3 || !get_player()) { tracker_pause(s); return; }
+    if(*(int *)(self+STATE)!=3 || !get_player()) {
+        tracker_pause(s);
+        /* A cleared GPS or absent player starts a genuinely new session.
+           State 1/2 are pending refreshes and preserve retry history. */
+        if(*(int *)(self+STATE)==0 || !get_player()) { s->has_target=0; s->locked=0; }
+        return;
+    }
     count=*(int *)(self+COUNT);
     if(count<2 || count>200) { tracker_pause(s);return; }
     p.w=0;get_pos(&p); now=*(U32 *)(game+TIMER);
+    { unsigned was_locked=s->locked;
     reason=tracker_update(s,p,*(Point *)(self+TARGET),(const Point *)self,count,
                           game[0xDA2EA3]!=0,now);
     if(reason) {
@@ -62,8 +69,10 @@ static void __fastcall update(U8 *self,void *unused) {
            route buffer mutation. Native logic handles it on the next update. */
         *(U32 *)(self+STATE)=1; *(U32 *)(self+STAMP)=now;
         tracker_pause(s);
-        OutputDebugStringA(reason==REVERSE?"[FastGPS v0.3] Reverse-progress reroute.\n":
-                                          "[FastGPS v0.3] Predicted-departure reroute.\n");
+        if(was_locked)OutputDebugStringA("[FastGPS v0.4] Direction lock overridden; retrying native route.\n");
+        OutputDebugStringA(reason==REVERSE?"[FastGPS v0.4] Reverse-progress reroute.\n":
+                                          "[FastGPS v0.4] Predicted-departure reroute.\n");
+    }
     }
 }
 static int apply_patch(void *module) {
@@ -109,7 +118,7 @@ static int apply_patch(void *module) {
 }
 int __stdcall DllMain(HANDLE module,U32 reason,void *reserved) {
     (void)reserved;
-    if(reason==1)OutputDebugStringA(apply_patch(module)?"[FastGPS v0.3] Motion-aware GPS active.\n":
-        "[FastGPS v0.3] Not applied: unsupported build, conflicting patch or protection failure.\n");
+    if(reason==1)OutputDebugStringA(apply_patch(module)?"[FastGPS v0.4] Motion-aware GPS active.\n":
+        "[FastGPS v0.4] Not applied: unsupported build, conflicting patch or protection failure.\n");
     return 1;
 }

@@ -67,5 +67,46 @@ int main(void) {
     assert(segment_distance2(P(0,0,30),bridge[0],bridge[1],1)==900);
     assert(segment_distance2(P(0,0,30),bridge[0],bridge[1],0)==0);
     puts("PASS 3D segment distance use");
+    /* Regression: one wrong turn, refreshed route still points back, then
+       another wrong turn. Old v0.3 remained locked forever. */
+    s=(Tracker){0}; step(&s,P(0,0,0),straight,4,0);
+    step(&s,P(0,2,0),straight,4,100);
+    step(&s,P(0,4,0),straight,4,200);
+    assert(step(&s,P(0,6,0),straight,4,300)==DEPARTURE);
+    tracker_pause(&s);
+    step(&s,P(0,6,0),straight,4,700);
+    assert(step(&s,P(0,8,0),straight,4,800)==KEEP);
+    assert(step(&s,P(0,10,0),straight,4,900)==KEEP);
+    assert(step(&s,P(0,12,0),straight,4,1000)==DEPARTURE);
+    puts("PASS stale replacement route: bounded retry without prior realignment");
+    s=(Tracker){0}; step(&s,P(10,0,0),straight,4,0);
+    step(&s,P(8,0,0),straight,4,100);
+    assert(step(&s,P(6,0,0),straight,4,200)==REVERSE);
+    tracker_pause(&s);
+    step(&s,P(4,0,0),straight,4,600);
+    assert(step(&s,P(2,0,0),straight,4,700)==KEEP);
+    assert(step(&s,P(0,0,0),straight,4,800)==KEEP);
+    assert(step(&s,P(0,2,0),straight,4,900)==KEEP);
+    assert(step(&s,P(0,4,0),straight,4,1000)==KEEP);
+    assert(step(&s,P(0,6,0),straight,4,1100)==DEPARTURE);
+    puts("PASS reverse followed by a wrong turn: lock overridden");
+    s=(Tracker){0}; step(&s,P(10,0,0),straight,4,0);
+    step(&s,P(8,0,0),straight,4,100);
+    assert(step(&s,P(6,0,0),straight,4,200)==REVERSE);
+    for(unsigned i=3;i<20;i++)assert(step(&s,P(10-(int)i*2,0,0),straight,4,i*100)==KEEP);
+    puts("PASS straight reverse remains suppressed even after cooldown");
+    /* Forward travel beyond an endpoint with the remaining path behind. */
+    Point back[]={P(-50,0,0),P(0,0,0),P(0,-50,0),P(-50,-50,0)};
+    s=(Tracker){0};step(&s,P(0,0,0),back,4,0);
+    step(&s,P(2,0,0),back,4,100);
+    step(&s,P(4,0,0),back,4,200);
+    assert(step(&s,P(6,0,0),back,4,300)==DEPARTURE);
+    puts("PASS overshooting a route endpoint: forward tangent is not enough");
+    /* A future parallel leg must not mask reverse travel on the nearest leg. */
+    Point loop[]={P(30,0,0),P(-30,0,0),P(-30,8,0),P(30,8,0)};
+    s=(Tracker){0};step(&s,P(0,0,0),loop,4,0);
+    assert(step(&s,P(2,0,0),loop,4,100)==KEEP);
+    assert(step(&s,P(4,0,0),loop,4,200)==REVERSE);
+    puts("PASS nearby parallel leg cannot mask reverse progress");
     return 0;
 }
