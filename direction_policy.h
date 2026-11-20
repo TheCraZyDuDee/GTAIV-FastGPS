@@ -69,8 +69,8 @@ static float route_length(const Point *route,int n) {
     return length;
 }
 enum { ALT_INVALID=0,ALT_ACCEPT=1,ALT_REVERSE=-1,ALT_DEST=-2,ALT_DETOUR=-3 };
-static int alternative_verdict(const Direction *d,const Point *baseline,int bn,const Point *candidate,int cn) {
-    float progress,l0,l1,allowance;int reverse;
+static int alternative_verdict_budget(const Direction *d,const Point *baseline,int bn,const Point *candidate,int cn,float allowance) {
+    float progress,l0,l1;int reverse;
     if(bn<2||bn>200||cn<2||cn>200)return ALT_INVALID;
     if(!start_progress(d,candidate,cn,&progress,&reverse))return ALT_INVALID;
     if(reverse||progress<4)return ALT_REVERSE;
@@ -78,8 +78,15 @@ static int alternative_verdict(const Direction *d,const Point *baseline,int bn,c
        absf(candidate[cn-1].z-baseline[bn-1].z)>0.25f)return ALT_DEST;
     l0=route_length(baseline,bn);l1=route_length(candidate,cn);
     if(l0<0||l1<0)return ALT_INVALID;
-    allowance=l0*0.35f;if(allowance<250)allowance=250;if(allowance>600)allowance=600;
     return l1<=l0+allowance?ALT_ACCEPT:ALT_DETOUR;
+}
+/* Original v0.7 budget retained for regression tests. */
+static int alternative_verdict(const Direction *d,const Point *baseline,int bn,const Point *candidate,int cn) {
+    float allowance;
+    if(bn<2||bn>200)return ALT_INVALID;
+    allowance=route_length(baseline,bn)*0.35f;
+    if(allowance<250)allowance=250;if(allowance>600)allowance=600;
+    return alternative_verdict_budget(d,baseline,bn,candidate,cn,allowance);
 }
 static int accept_alternative(const Direction *d,const Point *baseline,int bn,const Point *candidate,int cn) {
     return alternative_verdict(d,baseline,bn,candidate,cn)==ALT_ACCEPT;

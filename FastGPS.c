@@ -1,5 +1,5 @@
 /* GTA IV Complete Edition 1.2.0.59 x86. Runtime-only GPS changes. */
-#include "direction_policy.h"
+#include "adaptive.h"
 #if !defined(_M_IX86)
 #error Build with an x86 Windows MSVC-compatible compiler.
 #endif
@@ -31,8 +31,10 @@ static void (__cdecl *get_pos)(Point *);
 static void *(__cdecl *get_player)(void);
 static struct Slot { void *owner; Tracker tracking; } slots[4];
 static unsigned replacement;
+#include "settings.h"
 #include "diagnostics.h"
 static RejectedDirection rejected[4];
+static Preference preference[4];
 static U32 last_sample[4], last_wait[3];
 static unsigned have_wait[3];
 static U16 r16(const U8 *p) { return (U16)(p[0]|((U16)p[1]<<8)); }
@@ -44,7 +46,7 @@ static Tracker *slot(void *owner) {
     for(i=0;i<4;i++)if(slots[i].owner==owner)return &slots[i].tracking;
     for(i=0;i<4;i++)if(!slots[i].owner)break;
     if(i==4)i=replacement++&3;
-    s=&slots[i]; s->owner=owner; rejected[i].valid=0; last_sample[i]=0;
+    s=&slots[i]; s->owner=owner; rejected[i].valid=0; preference[i].valid=0; last_sample[i]=0;
     /* Avoid CRT memset dependency. Other fields become initialized on first use. */
     s->tracking.valid=0;s->tracking.has_target=0;s->tracking.locked=0;
     s->tracking.bad=0;s->tracking.good=0;s->tracking.evidence=0;s->tracking.last_force=0;
@@ -168,10 +170,16 @@ static void log_bias(U32 count,U32 elapsed) {
     char b[128],*p=log_text(b,"bias_stats blocked_edges=");p=log_uint(p,count);
     p=log_text(p," wall_ms=");p=log_uint(p,elapsed);log_send(b,p);
 }
+static void log_budget(float base,float candidate,float allowance,unsigned rejects) {
+    char b[192],*p=log_text(b,"detour_budget baseline=");
+    p=log_int(p,(int)base);p=log_text(p," candidate=");p=log_int(p,(int)candidate);
+    p=log_text(p," allowance=");p=log_int(p,(int)allowance);
+    p=log_text(p," previous_detour_rejections=");p=log_uint(p,rejects);log_send(b,p);
+}
 static void __fastcall rebuild(U8 *graph,void *unused,Point *dest,Point *route,U8 *flags,int max,int *count,U32 mode) {
     BuildRoute native=(BuildRoute)(game+0x4EB600);
     U8 *self=(U8 *)route; U32 now=*(U32 *)(game+TIMER),start;
-    int pending=*(int *)(self+STATE)==1,n,i,reverse,verdict;float progress;
+    int pending=*(int *)(self+STATE)==1,n,i,reverse,verdict;float progress,base_length,candidate_length,allowance;
     unsigned index=slot_index(self);Point p={0}; Direction d;
     Point saved[200];U8 saved_flags[200];
     (void)unused;
@@ -179,13 +187,17 @@ static void __fastcall rebuild(U8 *graph,void *unused,Point *dest,Point *route,U
     if(pending)log_route("build_before",self,p);
     native(graph,dest,route,flags,max,count,mode);
     n=*count;
-    if(pending&&index<4&&max>=2&&max<=200&&n>=2&&n<=max&&motion.moving&&now-motion.last<=350&&
+    if(index<4) {
+        preference_sync(&preference[index],*dest);
+        preference[index].forward=0;
+    }
+    if(settings.prefer_forward&&pending&&index<4&&max>=2&&max<=200&&n>=2&&n<=max&&motion.moving&&now-motion.last<=350&&
        get_player()&&((void *(__cdecl *)(void))(game+0x53F1C0))()&&
        direction_init(&d,p,motion.dx,motion.dy)) {
         if(!start_progress(&d,route,n,&progress,&reverse)) {
             rejected[index].valid=0;log_event("baseline_direction_unknown");
         } else if(!reverse && progress>= -6) {
-            rejected[index].valid=0;log_event("baseline_not_backward");
+            rejected[index].valid=0;preference[index].detour_rejections=0;log_event("baseline_not_backward");
         } else if(retry_allowed(&rejected[index],&d,*dest)) {
             log_route("baseline_backward",self,p);
             for(i=0;i<n;i++){copy_point(&saved[i],&route[i]);saved_flags[i]=flags[i];}
@@ -195,7 +207,12 @@ static void __fastcall rebuild(U8 *graph,void *unused,Point *dest,Point *route,U
             bias_active=0;
             log_bias(bias_blocked,GetTickCount()-start);
             log_route("biased_candidate",self,p);
-            verdict=(!bias_blocked||*count>max)?ALT_INVALID:alternative_verdict(&d,saved,n,route,*count);
+            base_length=route_length(saved,n);
+            candidate_length=(*count>=2&&*count<=max)?route_length(route,*count):-1;
+            allowance=detour_budget(&settings,base_length,preference[index].detour_rejections);
+            log_budget(base_length,candidate_length,allowance,preference[index].detour_rejections);
+            verdict=(!bias_blocked||*count>max)?ALT_INVALID:alternative_verdict_budget(&d,saved,n,route,*count,allowance);
+            preference_result(&preference[index],verdict);
             if(verdict==ALT_ACCEPT) {
                 rejected[index].valid=0;log_event("forward_alternative_accepted");
             } else {
@@ -205,7 +222,7 @@ static void __fastcall rebuild(U8 *graph,void *unused,Point *dest,Point *route,U
                 log_event("forward_alternative_rejected_baseline_restored");
             }
         } else log_event("forward_retry_deferred");
-    } else if(pending)log_event("bias_skipped_no_vehicle_motion_or_valid_baseline");
+    } else if(pending)log_event(settings.prefer_forward?"bias_skipped_no_vehicle_motion_or_valid_baseline":"forward_preference_disabled");
     if(pending)log_route("build_after",self,p);
 }
 
@@ -228,15 +245,23 @@ static void __fastcall update(U8 *self,void *unused) {
         }
         /* A cleared GPS or absent player starts a genuinely new session.
            State 1/2 are pending refreshes and preserve retry history. */
-        if(*(int *)(self+STATE)==0 || !get_player()) { s->has_target=0; s->locked=0; rejected[index].valid=0; }
+        if(*(int *)(self+STATE)==0 || !get_player()) { s->has_target=0; s->locked=0; rejected[index].valid=0; preference[index].valid=0; }
         return;
     }
     count=*(int *)(self+COUNT);
     if(count<2 || count>200) { tracker_pause(s);return; }
     p.w=0;get_pos(&p); now=*(U32 *)(game+TIMER);
+    preference_sync(&preference[index],*(Point *)(self+TARGET));
     { unsigned was_locked=s->locked;
     reason=tracker_update(s,p,*(Point *)(self+TARGET),(const Point *)self,count,
                           game[0xDA2EA3]!=0,now);
+    if(reason==DEPARTURE && settings.preserve && preference[index].forward &&
+       motion.moving && now-motion.last<=350) {
+        Direction d;
+        if(direction_init(&d,p,motion.dx,motion.dy)&&strong_forward_match(&d,(const Point *)self,count)) {
+            log_event("forward_route_preserved");reason=KEEP;s->locked=was_locked;tracker_pause(s);
+        }
+    }
     if(reason && rejected[index].valid && motion.moving && now-motion.last<=350) {
         Direction d;
         if(direction_init(&d,p,motion.dx,motion.dy)&&!retry_allowed(&rejected[index],&d,*(Point *)(self+TARGET))) {
@@ -249,9 +274,9 @@ static void __fastcall update(U8 *self,void *unused) {
            route buffer mutation. Native logic handles it on the next update. */
         *(U32 *)(self+STATE)=1; *(U32 *)(self+STAMP)=now;
         tracker_pause(s);
-        if(was_locked)OutputDebugStringA("[FastGPS v0.7] Direction lock overridden; retrying native route.\n");
-        OutputDebugStringA(reason==REVERSE?"[FastGPS v0.7] Reverse-progress reroute.\n":
-                                          "[FastGPS v0.7] Predicted-departure reroute.\n");
+        if(was_locked)OutputDebugStringA("[FastGPS v0.8] Direction lock overridden; retrying native route.\n");
+        OutputDebugStringA(reason==REVERSE?"[FastGPS v0.8] Reverse-progress reroute.\n":
+                                          "[FastGPS v0.8] Predicted-departure reroute.\n");
     }
     if(now-last_sample[index]>=500) {last_sample[index]=now;log_route("active",self,p);}
     }
@@ -331,18 +356,18 @@ static int apply_patch(void *module) {
         for(i=0;i<sizeof relax_bytes;i++)r[i]=relax_bytes[i];for(i=0;i<sizeof extract_bytes;i++)e[i]=extract_bytes[i];
         FlushInstructionCache(GetCurrentProcess(),b+DELAY,n);FlushInstructionCache(GetCurrentProcess(),r,sizeof relax_bytes);FlushInstructionCache(GetCurrentProcess(),e,sizeof extract_bytes);
     }
-    if(!VirtualProtect(e,sizeof extract_bytes,old3,&ignored))OutputDebugStringA("[FastGPS v0.7] Could not restore extraction page protection.\n");
-    if(!VirtualProtect(r,sizeof relax_bytes,old2,&ignored))OutputDebugStringA("[FastGPS v0.7] Could not restore search page protection.\n");
-    if(!VirtualProtect(b+DELAY,n,old,&ignored))OutputDebugStringA("[FastGPS v0.7] Could not restore GPS page protection.\n");
+    if(!VirtualProtect(e,sizeof extract_bytes,old3,&ignored))OutputDebugStringA("[FastGPS v0.8] Could not restore extraction page protection.\n");
+    if(!VirtualProtect(r,sizeof relax_bytes,old2,&ignored))OutputDebugStringA("[FastGPS v0.8] Could not restore search page protection.\n");
+    if(!VirtualProtect(b+DELAY,n,old,&ignored))OutputDebugStringA("[FastGPS v0.8] Could not restore GPS page protection.\n");
     if(!flushed)return 0;
     return 1;
 }
 int __stdcall DllMain(HANDLE module,U32 reason,void *reserved) {
     (void)reserved;
     if(reason==1) {
-        int ok=apply_patch(module);log_open();
-        log_event(ok?"FastGPS v0.7 active; coordinates x10":"FastGPS v0.7 rejected");
-        OutputDebugStringA(ok?"[FastGPS v0.7] Active.\n":"[FastGPS v0.7] Not applied.\n");
+        int ok;load_settings(module);ok=apply_patch(module);log_open();
+        log_event(ok?"FastGPS v0.8 active; coordinates x10":"FastGPS v0.8 rejected");
+        OutputDebugStringA(ok?"[FastGPS v0.8] Active.\n":"[FastGPS v0.8] Not applied.\n");
     }
     return 1;
 }

@@ -45,10 +45,10 @@ def verify_pe(path):
             thunk += 4
         libs[text(name).lower()] = set(names)
         i += 20
-    assert libs == {'kernel32.dll': {'CreateFileA', 'FlushInstructionCache', 'GetCurrentProcess',
-        'GetCurrentThreadId', 'GetModuleHandleA', 'GetModuleHandleExA', 'GetTempPathA',
+    assert libs == {'kernel32.dll': {'CreateFileW', 'FlushInstructionCache', 'GetCurrentProcess',
+        'GetCurrentThreadId', 'GetModuleHandleA', 'GetModuleHandleExA', 'GetModuleFileNameW', 'GetPrivateProfileIntW',
         'GetTickCount', 'OutputDebugStringA', 'VirtualProtect', 'WriteFile'}}, libs
-    print('PASS PE32 DLL and 11 undecorated kernel32 imports; no CRT')
+    print('PASS PE32 DLL and 12 undecorated kernel32 imports; no CRT')
 
 
 def verify_hooks(path):

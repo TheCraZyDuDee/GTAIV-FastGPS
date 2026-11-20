@@ -1,17 +1,17 @@
 /* Local bounded diagnostic log. No CRT or external telemetry. */
 #ifndef FASTGPS_DIAGNOSTICS_H
 #define FASTGPS_DIAGNOSTICS_H
-IMPORT U32 __stdcall GetTempPathA(U32,char *);
-IMPORT HANDLE __stdcall CreateFileA(const char *,U32,U32,void *,U32,U32,HANDLE);
+IMPORT HANDLE __stdcall CreateFileW(const wchar_t *,U32,U32,void *,U32,U32,HANDLE);
 IMPORT int __stdcall WriteFile(HANDLE,const void *,U32,U32 *,void *);
 static HANDLE log_file;
 static U32 log_lines;
 static void log_open(void) {
-    char path[260];const char name[]="GTAIV-FastGPS.log";U32 i,n=GetTempPathA(sizeof path,path);
-    if(!n||n>=sizeof path||n+sizeof name>sizeof path)return;
-    for(i=0;i<sizeof name;i++)path[n+i]=name[i];
-    log_file=CreateFileA(path,0x40000000,3,0,2,0x80,0);
+    const wchar_t *path;
+    if(!settings.logging)return;
+    path=sibling_file(L"GTAIV-FastGPS.log");
+    if(path)log_file=CreateFileW(path,0x40000000,3,0,2,0x80,0);
     if(log_file==(HANDLE)-1)log_file=0;
+    if(!log_file)OutputDebugStringA("[FastGPS v0.8] Cannot open log beside ASI.\n");
 }
 static char *log_text(char *p,const char *s) {while(*s)*p++=*s++;return p;}
 static char *log_uint(char *p,U32 n) {

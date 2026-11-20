@@ -1,38 +1,41 @@
-# GTAIV-FastGPS v0.7 — direction-constrained native routing (experimental)
+# GTAIV-FastGPS v0.8 — adaptive forward routing
 
-Native x86 ASI for GTA IV Complete Edition 1.2.0.59. This version replaces the v0.5/v0.6 forward-node/prefix experiments and removes the independent stale-route watchdog. It retains the small 184 ms route-acceptance delay, 20-unit native distance threshold, motion-aware deviation detection and local logging. The goal is to find a viable forward route, rather than to repeatedly recalculate the same backwards route.
+Native x86 ASI for GTA IV Complete Edition 1.2.0.59. Builds on the in-game tested v0.7 direction-constrained native pathfinder. The executable patch sites, 184 ms route-acceptance delay, 20-unit off-route threshold and native fallback are unchanged.
 
-## Installation
+## Install
 
-Replace any previous FastGPS.asi in the GTA IV directory or the configured x86 ASI loader plugin directory. Restart the game. No ScriptHook or permanent changes to GTAIV.exe. The ASI is startup-only and pinned while hooks are installed. To uninstall, remove the ASI before restarting. Do not load two versions together.
+Replace the previous FastGPS.asi and put FastGPS.ini in the same directory as the ASI. Restart GTA IV. The ASI's actual module path is used, including nested scripts folders and Unicode paths. The local GTAIV-FastGPS.log is recreated beside the ASI at startup; the mod no longer writes to TEMP. If the directory is not writable, logging is unavailable (a debugger message reports failure); no alternate directory is used. No INI is required for default behavior, and no user INI is overwritten. A supplied default INI is included in the ZIP. Restart after configuration changes.
 
-## What the runtime log established
+## Routing preferences
 
-A 69-second v0.6 user test contained 67 logged completed rebuilds, all with nonempty routes. Of 64 mod-forced requests, the next completed rebuild arrived after a median 56 ms in game-time (7–81 ms). Yet the second point repeatedly remained fixed behind the car while the first point moved along the street. Of 12 redirected start nodes, 11 were rejected and restored to the vanilla result; only one forward prefix was retained. This rules out a long recalculation or streaming wait as the main cause within that recording. It does not prove that every backwards route is invalid: the native search may genuinely prefer a shorter route via a U-turn.
+The initial detour allowance is 50% of native route length (minimum 250 units for positive percentages), capped at 1,000 additional game units. When an otherwise valid forward candidate is rejected solely for excessive detour, the next allowed attempt receives one additional level of tolerance. Three levels interpolate to 100% and 2,000 additional units. The existing retry gate still requires meaningful movement or a new heading. Successful forward acceptance, a non-backwards native rebuild or a new destination resets the tolerance. A legal original route is restored when no qualifying forward alternative exists. The preference can choose longer routes, not necessarily faster routes.
 
-## New routing policy
+After a constrained route is accepted, a mod-generated departure request is suppressed only when the current local route still strongly agrees with actual movement, upcoming position and elevation. Native invalidation and reverse detection are never suppressed by this stabilization rule; the mod does not keep obsolete route buffers across native rebuilds. A cleared or changed destination resets the state.
 
-1. Run the original route builder normally. If there is a moving player in a vehicle and the new route clearly initially points backwards, keep a copy of its points and flags.
-2. Try the original builder a second time, with a local directed edge restriction. In a corridor around the car (45 units behind to 100 ahead, roughly 12 units centerline lateral tolerance, with elevation checks), edges running strongly opposite the direction of travel are excluded. Perpendicular turns, forward edges, distant roads, and other native lane/connection rules are left alone. Both native search relaxation and extraction obey the same filter. No graph data or path costs are modified.
-3. Accept the candidate only if its beginning is close to the current player, it produces forward progress, it ends at the same node position as the original output, and its approximate length is no more than the original plus a bounded allowance (35% of baseline, clamped to 250–600 units). Otherwise restore the original native points, flags and count. The approximation is an explicit preference for a reasonable forward detour, not a guarantee of the fastest travel time.
-4. If an alternative is rejected, do not retry the same directional conflict until the player moves at least 25 units, changes heading substantially after four units of movement, changes the destination, or changes height significantly. Native off-route detection is never gated by this rule. There is no extra wait on a new accepted path.
+| INI key | Default | Valid values |
+| --- | --- | --- |
+| Routing.PreferForward | 1 | 0 or 1 |
+| Routing.AdaptiveDetours | 1 | 0 or 1 |
+| Routing.DetourPercent | 50 | 0–200 |
+| Routing.MaxExtraDistance | 1000 | 0–5000 |
+| Routing.AdaptiveMaxPercent | 100 | 0–200, at least DetourPercent |
+| Routing.AdaptiveMaxExtraDistance | 2000 | 0–5000, at least MaxExtraDistance |
+| Routing.PreserveForwardRoute | 1 | 0 or 1 |
+| Diagnostics.Logging | 1 | 0 or 1 |
 
-The optional restriction is active only inside the second synchronous GPS builder call and only on its calling thread. Ordinary AI/traffic and non-GPS path searches execute the original instructions. The code patches themselves remain installed until the game restarts; this adds some overhead even when inactive. No whole-map road search or synthetic prefix point is used.
+Distances use game-world units. Setting AdaptiveDetours=0 fixes the initial budget; PreferForward=0 skips constrained searches but retains fast GPS and motion tracking. Zero percent allows no extra distance at that level. Out-of-range numeric values use defaults; adaptive maxima below initial values are raised to the initial values. To approximate the v0.7 policy set DetourPercent=35, MaxExtraDistance=600, AdaptiveDetours=0 and PreserveForwardRoute=0.
 
 ## Diagnostics
 
-FastGPS writes `%TEMP%\GTAIV-FastGPS.log` locally, recreated on launch, capped at 20,000 lines. In-game coordinates are multiplied by ten and truncated; hashes identify the stored XYZ sequence. Nothing is transmitted. Use the same route and wrong turns as in v0.6, exit, and preserve the log before another launch. The important new lines are:
+The existing v0.7 log events are retained. New `detour_budget` lines show approximate baseline length, candidate length, allowed extra distance and the prior detour-rejection count. `forward_route_preserved` records a suppressed mod-triggered departure; `forward_preference_disabled` records a disabled constrained search. Copy the log before restarting. It contains game-world data only and is not transmitted.
 
-- `baseline_backward`: the native rebuilt path begins backwards relative to travel.
-- `baseline_not_backward`, `baseline_direction_unknown`, `bias_skipped_no_vehicle_motion_or_valid_baseline`: no alternative attempted; the last two indicate insufficient evidence.
-- `bias_stats blocked_edges=... wall_ms=...`: number of excluded edge visits and measured elapsed Windows tick time for the second builder call. counts are visits, not necessarily unique edges; millisecond resolution is limited by the system tick.
-- `biased_candidate`: actual native alternative result, with count, hash, starting points.
-- `forward_alternative_accepted`: new forward route accepted.
-- `reject_no_matching_reverse_edges`, `reject_still_backward_or_no_forward_progress`, `reject_different_endpoint`, `reject_excessive_detour`, `reject_invalid_or_disconnected_path`: reason for fallback.
-- `forward_alternative_rejected_baseline_restored` and `forward_retry_deferred`: original path preserved and repeated alternative search throttled.
-- `build_after`: final selected path. `roads_wait`, `roads_ready`, `pending`, `active` and forced request events are retained.
+## Verification
 
-## Reverse engineering
+Build using build.cmd from the Visual Studio x86 Native Tools prompt. Offline tests: verify_exe.py (19 signatures), verify_build.py (clang-cl exact detour layout, PE32 and 12 undecorated kernel32 imports), and the six host C test programs, including test_adaptive.c and test_settings.c. These cover the adaptive bounds, old and new acceptance policy, route stabilization, mocked Unicode module-relative file paths and configuration defaults. The test programs can be built with clang -O1 -fsanitize=address,undefined test_NAME.c -o test_NAME. The original v0.7 game integration received positive user feedback; v0.8 itself still requires in-game testing. If the new policy chooses too many long detours, reduce the INI limits. Native pathfinding, one-way rules and the previous fallback remain intact.
+
+## Native reverse-engineering reference
+
+The following section is retained from v0.7 for the unchanged native hook sites and graph traversal. For historical routing defaults and prior test details, see the [v0.7 snapshot](https://github.com/TheCraZyDuDee/GTAIV-FastGPS/tree/4d5c2db91e5255371c16acd4377c66ea93885403).
 
 Supplied PE32 GTAIV.exe: SHA-256 `08759a5516f9837920ea504436236bbab89d0826a8e4d04ff106345177b5345d`, timestamp `0x63D3E735`, size-of-image `0x01BE6400`, preferred base `0x400000`. GTA IV 1.2.0.59 only.
 
@@ -42,10 +45,6 @@ Supplied PE32 GTAIV.exe: SHA-256 `08759a5516f9837920ea504436236bbab89d0826a8e4d0
 - At `0x8E8078` (RVA `0x4E8078`), `[ESP+0x14]` is the current start-side node and EDX its next candidate. Apply exactly the same ordered predicate, jump to the pre-existing next-link branch `0x8E8285` if rejected; replay `mov ecx,[esp+0x14]; movsx ecx,word ptr [ecx+0x10]` otherwise and return to `0x8E8080`. Both detours preserve all GPRs, EFLAGS, XMM0–7 and MXCSR, including the native scratch cost/register values. They don't modify graph memory and don't inject a route directly. Only fallback restoration writes the previously saved legitimate route.
 - Node XYZ at +0x14/16/18 signed words, scales 1/8,1/8,1/64 (native builder at `0x8EB827`). Native route points are 16 bytes with parallel flag bytes; count +0xD60, capacity 200. All six patch sites and both skip/continue signatures are validated before installation. Three code pages are restored after installation; failed cache flush triggers rollback. Original streaming rectangle and renderer unchanged.
 
-## Build and tests
-
-From a Visual Studio x86 Native Tools prompt, run `build.cmd`. For offline executable verification: `python verify_exe.py GTAIV.exe`. Host C tests: `clang -O1 -fsanitize=address,undefined test_tracker.c -o test_tracker` and likewise `test_direction_policy.c`; run both binaries. Existing road_start/lifecycle tests are retained for regression reference; the v0.6 road-selection/watchdog routines are no longer active. The new test suite exercises local directed restrictions, forward-route acceptance, failure fallback, heading-based retry, a small directed graph with a reverse shortest path and a forward alternate, and repeated backwards route geometry. The ASI was cross-compiled with clang-cl/lld-link; PE32, undecorated kernel32 imports, original signatures, and emitted hook instruction/stack layouts were checked. `python verify_build.py FastGPS.asi FastGPS.obj` reproduces the PE-import and exact clang-cl hook-encoding/relocation checks (MSVC encodings can differ).
-
 ## Limitations
 
-This is an experimental pathfinding change, not an in-game validated release. The executable cannot be run here. The native shortest path can legitimately point backwards, and in the event of no legal/acceptable forward route the original answer is intentionally retained. The local restriction can reject valid edges near parallel streets or complicated intersections and may add frame time during the second native search. The local log distinguishes such cases. The renderer and road streaming are unchanged; no claim is made that all backwards guidance is fixed.
+The ASI cannot be executed in GTA IV in this environment. Windows INI/path behavior is tested using mocked API calls, not a live Windows game session. Native route failures, genuine U-turns, parallel roads and unusual intersections may still limit guidance. Additional detours can be longer than desired, and the existing second native search can add some frame time. The log reports the actual selected path. No game executable is redistributed.
