@@ -31,7 +31,9 @@ def verify(path):
     source = Path(__file__).with_name('FastGPS.c').read_text()
     sites = {'gate': 0x53786a, 'tail': 0x53788d, 'caller': 0x5378e7,
              'entry': 0x537920, 'cmp': 0x537ae8, 'branch': 0x537aef,
-             'off': 0x537b04, 'stamp': 0x537b13, 'position': 0x53f090}
+             'off': 0x537b04, 'stamp': 0x537b13, 'position': 0x53f090, 'build_call': 0x5378c6, 'start_call': 0x4eb732,
+             'vehicle': 0x53f1c0, 'nearest_entry': 0x4e87d0,
+             'graph_link': 0x4e8020, 'graph_lane': 0x4e805a}
     for name, rva in sites.items():
         pattern = re.search(r'\b'+name+r'\[\]=\{([^}]+)\}', source)
         expected = bytes(int(part, 0) for part in pattern.group(1).split(','))
@@ -59,7 +61,7 @@ def verify(path):
         if (call_site+5+rel) & 0xffffffff != target:
             raise ValueError('Hook relocation mismatch')
     print('SHA-256:', hashlib.sha256(data).hexdigest())
-    print('PASS PE header, nine code signatures, timer and distance operands, hook relocation')
+    print('PASS PE header, 15 code signatures, timer and distance operands, hook relocation')
 
 
 if __name__ == '__main__':
