@@ -20,7 +20,11 @@ IMPORT int STDCALL FlushInstructionCache(HANDLE process, const void *address, U3
 IMPORT HANDLE STDCALL GetCurrentProcess(void);
 IMPORT void STDCALL OutputDebugStringA(const char *message);
 
-#define PATCH_RVA 0x537884UL
+#define DELAY_RVA 0x537884UL
+#define DETECT_RVA 0x537AEBUL
+#define ORIGINAL_DISTANCE_RVA 0xBE8B68UL
+#define NEW_DISTANCE_RVA 0xBE8B38UL
+#define PATCH_LENGTH (DETECT_RVA - DELAY_RVA + 1)
 #define HEADER_TIMESTAMP 0x63D3E735UL
 #define IMAGE_SIZE 0x01BE6400UL
 #define PAGE_EXECUTE_READWRITE 0x40UL
@@ -48,10 +52,12 @@ static int apply_patch(void) {
     static const U8 offroute[] = {0xC7,0x83,0x64,0x0D,0,0,1,0,0,0,0xA1};
     static const U8 stamp[] = {0x89,0x83,0x68,0x0D,0,0};
     static const U8 tail[] = {0x76,0x58,0xFF,0xB6,0x70,0x0D,0,0,0xB9};
+    static const U8 detect_prefix[] = {0x0F,0x2F,0x0D};
+    static const U8 detect_tail[] = {0x77,0x13,0x85,0xD2,0x7E,0x24,0x52,0x8B,0xCB,0xE8,0x23,0xEF,0xFF,0xFF};
     U8 *base = (U8 *)GetModuleHandleA(0);
-    U8 *pe, *p, *target, *off;
+    U8 *pe, *p, *target, *off, *detect;
     U32 offset, timer, old, ignored;
-    if (!base || read16(base)!=0x5A4D) return 0;
+    if (!base || ((U32)base & 0xFFFFUL) || read16(base)!=0x5A4D) return 0;
     offset=read32(base+0x3C);
     if (offset<0x40 || offset>0x800) return 0;
     pe=base+offset;
@@ -59,28 +65,33 @@ static int apply_patch(void) {
         read32(pe+8)!=HEADER_TIMESTAMP || read16(pe+24)!=0x10B ||
         read32(pe+24+56)!=IMAGE_SIZE) return 0;
     p=base+0x53786A;
-    target=base+PATCH_RVA;
+    target=base+DELAY_RVA;
+    detect=base+DETECT_RVA;
     off=base+0x537B04;
     timer=(U32)base+0xD735B4;
     if (!match(p,gate,sizeof(gate)) || read32(p+31)!=timer ||
         !match(p+35,tail,sizeof(tail)) ||
         read32(p+44)!=(U32)base+0xD77A80 ||
         !match(off,offroute,sizeof(offroute)) || read32(off+11)!=timer ||
-        !match(off+15,stamp,sizeof(stamp))) return 0;
-    /* 3000 (0x0BB8) -> 184 (0x00B8). A single byte write avoids a torn
-       multi-byte immediate. Never bypass the vanilla readiness check. */
-    if (!VirtualProtect(target,1,PAGE_EXECUTE_READWRITE,&old)) return 0;
+        !match(off+15,stamp,sizeof(stamp)) ||
+        !match(detect-3,detect_prefix,sizeof(detect_prefix)) ||
+        read32(detect)!=(U32)base+ORIGINAL_DISTANCE_RVA ||
+        !match(detect+4,detect_tail,sizeof(detect_tail)) ||
+        read32(base+ORIGINAL_DISTANCE_RVA)!=0x42480000UL ||
+        read32(base+NEW_DISTANCE_RVA)!=0x41A00000UL) return 0;
+    /* Both edits lie in the same 4 KiB code page. Each is one byte:
+       3000 -> 184 ms, and redirect the GPS-only 50.0f operand to the
+       existing 20.0f constant. Do not modify the shared float constants.
+       The PE image is 64 KiB aligned, so the low-byte edit survives ASLR. */
+    if (!VirtualProtect(target,PATCH_LENGTH,PAGE_EXECUTE_READWRITE,&old)) return 0;
     *(volatile U8 *)target=0;
-    if (!FlushInstructionCache(GetCurrentProcess(),target,1)) {
+    *(volatile U8 *)detect=0x38;
+    if (!FlushInstructionCache(GetCurrentProcess(),target,PATCH_LENGTH) ||
+        !VirtualProtect(target,PATCH_LENGTH,old,&ignored)) {
+        *(volatile U8 *)detect=0x68;
         *(volatile U8 *)target=0x0B;
-        FlushInstructionCache(GetCurrentProcess(),target,1);
-        VirtualProtect(target,1,old,&ignored);
-        return 0;
-    }
-    if (!VirtualProtect(target,1,old,&ignored)) {
-        *(volatile U8 *)target=0x0B;
-        FlushInstructionCache(GetCurrentProcess(),target,1);
-        VirtualProtect(target,1,old,&ignored);
+        FlushInstructionCache(GetCurrentProcess(),target,PATCH_LENGTH);
+        VirtualProtect(target,PATCH_LENGTH,old,&ignored);
         return 0;
     }
     return 1;
@@ -89,8 +100,8 @@ static int apply_patch(void) {
 int STDCALL DllMain(HANDLE module, U32 reason, void *reserved) {
     (void)module; (void)reserved;
     if (reason==1) {
-        if (apply_patch()) OutputDebugStringA("[FastGPS] Applied: 3000 -> 184 ms.\n");
-        else OutputDebugStringA("[FastGPS] Not applied: unsupported executable, conflicting patch, or protection failure.\n");
+        if (apply_patch()) OutputDebugStringA("[FastGPS v0.2] Applied: 3000 -> 184 ms; off-route 50 -> 20 units.\n");
+        else OutputDebugStringA("[FastGPS v0.2] Not applied: unsupported executable, conflicting patch, or protection failure.\n");
     }
     return 1;
 }

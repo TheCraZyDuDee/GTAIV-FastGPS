@@ -1,6 +1,6 @@
 # GTAIV-FastGPS
 
-Native x86 ASI mod for Grand Theft Auto IV. Reduces the GPS route-acceptance delay from 3,000 ms to 184 ms after a missed turn. The original pathfinding system and its readiness checks remain intact; the actual time to receive a new route depends on when it finishes.
+Version 0.2. Native x86 ASI mod for Grand Theft Auto IV. Reduces the GPS route-acceptance delay from 3,000 ms to 184 ms after a missed turn and reduces the off-route detection threshold from 50 to 20 game-world distance units. The original pathfinding system and its readiness checks remain intact; the actual time to receive a new route depends on when it finishes.
 
 ## Compatibility
 
@@ -8,11 +8,11 @@ Statically verified against the provided Complete Edition 1.2.0.59 executable (P
 
 ## Installation
 
-1. Ensure a compatible 32-bit ASI loader is installed for your GTA IV build.
+1. Remove any earlier FastGPS ASI first; do not load both versions. Ensure a compatible 32-bit ASI loader is installed for your GTA IV build.
 2. Place `FastGPS.asi` beside `GTAIV.exe` (or in the ASI loader's configured plugin directory).
 3. Restart the game. To uninstall, remove `FastGPS.asi` before starting the game again.
 
-The plugin writes a diagnostic through `OutputDebugStringA`; use a Windows debugger or DebugView to capture `[FastGPS] Applied: 3000 -> 184 ms.` A rejection or protection error instead produces a `Not applied` message. No config is needed.
+The plugin writes a diagnostic through `OutputDebugStringA`; use a Windows debugger or DebugView to capture `[FastGPS v0.2] Applied: 3000 -> 184 ms; off-route 50 -> 20 units.` A rejection or protection error instead produces a `Not applied` message. No config is needed.
 
 ## Build
 
@@ -22,14 +22,16 @@ Run `build.cmd` in the **x86 Native Tools Command Prompt for Visual Studio** wit
 
 Addresses below apply to the supplied executable at its preferred image base of `0x400000`:
 
-- `0x937920`: route update/deviation handler. It examines the nearest route segments. The off-route branch at `0x937B04` sets state 1 and stores the current game timer in `[ebx+0xD68]`.
+- `0x937920`: route update/deviation handler. It examines up to 11 upcoming route segments using the point-to-segment distance helper at `0xAF86A0`. At `0x937AE8`, `comiss xmm1, [0xFE8B68]` compares the minimum distance to 50.0f. A value above 50 triggers the off-route branch. The off-route branch at `0x937B04` sets state 1 and stores the current game timer in `[ebx+0xD68]`.
 - `0x937610`: GPS update routine. At `0x937882`, `add eax, 0xBB8` adds 3,000 ms to the saved timestamp. The comparison at `0x937887` branches away until the deadline has passed. The pathfinding readiness test still follows, and the routine accepts the completed path only when ready.
 - The mod writes one byte at RVA `0x537884`, changing `05 B8 0B 00 00` to `05 B8 00 00 00` (184 ms). It uses the module base rather than a fixed loaded address and restores page protection after flushing the instruction cache. State 2 and the pre-existing bypass flag remain untouched. Other GPS operations that share this gate may also complete sooner.
 
-The delay is reduced by about 94%; this is not a benchmark of total GPS calculation time. The 184 ms value was chosen to make the patch a single-byte change while retaining a brief wait. No new pathfinding requests are injected.
+- v0.2 also changes one byte at RVA `0x537AEB` (operand of `comiss`), redirecting the comparison from the existing 50.0f constant at RVA `0xBE8B68` to the existing 20.0f constant at RVA `0xBE8B38`. The shared constants themselves remain untouched. Both original/target floats and instruction context are checked before either write. The 64 KiB image alignment preserves this low-byte operand change under ASLR. Both edits share a code page. The route search window, state transitions and moving-destination threshold remain unchanged.
+
+The detection threshold is reduced by 60%; 20 units is a conservative starting point, not a guarantee of perfect detection. Nearby roads, overlapping routes and the existing 11-segment lookahead can still delay recognition. The delay is reduced by about 94%; this is not a benchmark of total GPS calculation time. The 184 ms value was chosen to make the patch a single-byte change while retaining a brief wait. No new pathfinding requests are injected.
 
 ## Verification and testing
 
-`python verify_exe.py path\to\GTAIV.exe` checks the original executable offline without changing it. The compiled ASI has been cross-compiled and checked for PE32 architecture and correct Windows import names. Actual in-game testing remains outstanding.
+`python verify_exe.py path\to\GTAIV.exe` checks the original executable offline without changing it. The compiled ASI has been cross-compiled and checked for PE32 architecture and correct Windows import names. User feedback confirms v0.1 improves rerouting speed after detection. v0.2 has been statically verified; its in-game testing remains outstanding.
 
-Suggested in-game checks: use the same waypoint/vehicle/road in vanilla and modded sessions, miss a turn several times, measure time from off-route detection to the new visible route, and watch for route flicker or crashes. Also test waypoint changes, mission GPS, and driving close to parallel roads. Check DebugView for the applied message. If there is a conflict, uninstall the mod; no executable repair is needed.
+Suggested in-game checks: use the same waypoint/vehicle/road in vanilla and modded sessions, miss a turn several times, measure time from off-route detection to the new visible route, and watch for route flicker or crashes. Also test waypoint changes, mission GPS, and driving close to parallel roads. Check that normal lane changes, wide junctions and sharp curves do not cause repeated reroutes. Check DebugView for the applied message. If there is a conflict, uninstall the mod; no executable repair is needed.
